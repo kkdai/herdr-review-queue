@@ -1,0 +1,296 @@
+#!/bin/sh
+set -eu
+
+HC="${HC_BIN:-hc}"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  hc-review ready "<summary>" [--to <t>] [--no-send]
+  hc-review seen <t>
+  hc-review clear <t>
+  hc-review ls [--all] [--json]
+  hc-review --help
+EOF
+}
+
+die() {
+  printf 'hc-review: %s\n' "$*" >&2
+  exit 2
+}
+
+now_ms() {
+  if [ -n "${HC_REVIEW_NOW_MS:-}" ]; then
+    printf '%s\n' "$HC_REVIEW_NOW_MS"
+  else
+    jq -nr 'now * 1000 | floor | tostring'
+  fi
+}
+
+sanitize_summary() {
+  jq -nr --arg s "$1" '
+    $s
+    | gsub("[\r\n\t]"; " ")
+    | if length > 200 then .[:199] + "…" else . end
+  '
+}
+
+cmd_ready() {
+  to=""
+  no_send=0
+  summary=""
+  has_summary=0
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      --no-send)
+        no_send=1
+        shift
+        ;;
+      --to)
+        if [ "$#" -lt 2 ] || [ -z "$2" ]; then
+          die "--to requires a terminal address"
+        fi
+        to="$2"
+        shift 2
+        ;;
+      --to=*)
+        to="${1#--to=}"
+        if [ -z "$to" ]; then
+          die "--to requires a terminal address"
+        fi
+        shift
+        ;;
+      --)
+        shift
+        break
+        ;;
+      -*)
+        die "unknown option for ready: $1"
+        ;;
+      *)
+        if [ "$has_summary" -eq 1 ]; then
+          die "unexpected extra argument: $1"
+        fi
+        summary="$1"
+        has_summary=1
+        shift
+        ;;
+    esac
+  done
+
+  while [ "$#" -gt 0 ]; do
+    if [ "$has_summary" -eq 1 ]; then
+      die "unexpected extra argument: $1"
+    fi
+    summary="$1"
+    has_summary=1
+    shift
+  done
+
+  if [ "$has_summary" -eq 0 ]; then
+    die "ready requires a <summary>"
+  fi
+
+  if [ -z "${HC_TERMINAL_ID:-}" ]; then
+    die "HC_TERMINAL_ID is not set"
+  fi
+
+  if [ -z "$to" ]; then
+    if ! info=$("$HC" get "$HC_TERMINAL_ID" --json 2>/dev/null); then
+      die "failed to inspect terminal $HC_TERMINAL_ID"
+    fi
+    to=$(printf '%s\n' "$info" | jq -r '.parent // empty' 2>/dev/null || true)
+    if [ -z "$to" ]; then
+      die "no reviewer found for $HC_TERMINAL_ID (no parent and --to not given)"
+    fi
+  fi
+
+  clean_summary=$(sanitize_summary "$summary")
+  at=$(now_ms)
+
+  "$HC" label "$HC_TERMINAL_ID" \
+    "review=ready" \
+    "review.summary=$clean_summary" \
+    "review.at=$at" \
+    "review.to=$to" \
+    "review.seen_at=" >/dev/null
+
+  if [ "$no_send" -eq 0 ]; then
+    "$HC" send "$to" "[review-ready] $clean_summary" >/dev/null
+  fi
+
+  printf 'ready: %s → %s\n' "$HC_TERMINAL_ID" "$to"
+}
+
+cmd_seen() {
+  if [ "$#" -eq 1 ] && { [ "$1" = "-h" ] || [ "$1" = "--help" ]; }; then
+    usage
+    exit 0
+  fi
+  if [ "$#" -ne 1 ] || [ -z "$1" ]; then
+    die "usage: hc-review seen <t>"
+  fi
+  case "$1" in
+    -*)
+      die "unknown option for seen: $1"
+      ;;
+  esac
+  target="$1"
+  seen_at=$(now_ms)
+  "$HC" label "$target" "review=seen" "review.seen_at=$seen_at" >/dev/null
+  printf 'seen: %s\n' "$target"
+}
+
+cmd_clear() {
+  if [ "$#" -eq 1 ] && { [ "$1" = "-h" ] || [ "$1" = "--help" ]; }; then
+    usage
+    exit 0
+  fi
+  if [ "$#" -ne 1 ] || [ -z "$1" ]; then
+    die "usage: hc-review clear <t>"
+  fi
+  case "$1" in
+    -*)
+      die "unknown option for clear: $1"
+      ;;
+  esac
+  target="$1"
+  "$HC" label "$target" \
+    "review=" \
+    "review.summary=" \
+    "review.at=" \
+    "review.to=" \
+    "review.seen_at=" >/dev/null
+  printf 'cleared: %s\n' "$target"
+}
+
+cmd_ls() {
+  include_all=0
+  json_out=0
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      --all)
+        include_all=1
+        shift
+        ;;
+      --json)
+        json_out=1
+        shift
+        ;;
+      *)
+        die "unknown argument for ls: $1"
+        ;;
+    esac
+  done
+
+  ls_raw=$("$HC" ls --json)
+  addrs=$(printf '%s\n' "$ls_raw" | jq -r '(if type == "array" then . else (.terminals // []) end) | .[] | .address // empty')
+
+  full_objs=""
+  if [ -n "$addrs" ]; then
+    OLD_IFS=$IFS
+    IFS='
+'
+    for addr in $addrs; do
+      IFS=$OLD_IFS
+      if [ -n "$addr" ]; then
+        if item=$("$HC" get "$addr" --json 2>/dev/null) && [ -n "$item" ]; then
+          full_objs="${full_objs}${item}
+"
+        fi
+      fi
+    done
+    IFS=$OLD_IFS
+  fi
+
+  now=$(now_ms)
+
+  if [ "$json_out" -eq 1 ]; then
+    printf '%s' "$full_objs" | jq -s \
+      --argjson all "$include_all" '
+      map(select(
+        ((.labels // {}).review == "ready")
+        or ($all == 1 and ((.labels // {}).review == "seen"))
+      ))
+      | sort_by(((.labels["review.at"] // "0") | tonumber? // 0), (.address // ""))
+    '
+  else
+    printf '%s' "$full_objs" | jq -sr \
+      --argjson all "$include_all" \
+      --argjson now "$now" '
+      def fmt_age($now):
+        if (. == null or . == "") then "-"
+        else
+          (tonumber? // null) as $at |
+          if $at == null then "-"
+          else
+            (($now - $at) / 1000 | floor | if . < 0 then 0 else . end) as $s |
+            if $s < 60 then "just now"
+            elif $s < 3600 then "\($s / 60 | floor)m"
+            elif $s < 86400 then "\($s / 3600 | floor)h"
+            else "\($s / 86400 | floor)d"
+            end
+          end
+        end;
+      def pad($w): . + ((" " * ($w - length)) // "");
+
+      map(select(
+        ((.labels // {}).review == "ready")
+        or ($all == 1 and ((.labels // {}).review == "seen"))
+      ))
+      | sort_by(((.labels["review.at"] // "0") | tonumber? // 0), (.address // ""))
+      | (
+          [["ADDRESS", "NAME", "AGE", "SUMMARY"]] +
+          map([
+            (.address // "-"),
+            (if (.name // "") == "" then "-" else .name end),
+            ((.labels["review.at"] // null) | fmt_age($now)),
+            ((.labels["review.summary"] // "") | gsub("[\r\n\t]"; " "))
+          ])
+        ) as $rows
+      | ([0, 1, 2] | map(. as $i | ($rows | map(.[$i] | length) | max))) as $w
+      | $rows[]
+      | "\((.[0] | pad($w[0])))  \((.[1] | pad($w[1])))  \((.[2] | pad($w[2])))  \(.[3])"
+    '
+  fi
+}
+
+if [ "$#" -eq 0 ]; then
+  usage >&2
+  exit 2
+fi
+
+subcmd="$1"
+shift
+
+case "$subcmd" in
+  -h|--help|help)
+    usage
+    exit 0
+    ;;
+  ready)
+    cmd_ready "$@"
+    ;;
+  seen)
+    cmd_seen "$@"
+    ;;
+  clear)
+    cmd_clear "$@"
+    ;;
+  ls)
+    cmd_ls "$@"
+    ;;
+  *)
+    die "unknown subcommand: $subcmd"
+    ;;
+esac
