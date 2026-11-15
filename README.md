@@ -47,15 +47,18 @@ herdr-app do pane.split --direction right --mod review-queue
 herdr-app do pane.split --direction right --mod review-queue --pane <pane-id>
 ```
 
-You can also bind a shortcut in `~/.config/herdr-app/keys.json` to `"review-queue:next"` to open the oldest pending item in the queue:
+You can also bind shortcuts in `~/.config/herdr-app/keys.json` to open the panel or jump to the oldest pending item in the queue (`"review-queue.next"`):
 
 ```json
 {
   "global": {
-    "ctrl-shift-r": "review-queue:next"
+    "ctrl-shift-q": { "command": "pane.split", "args": { "direction": "right", "mod": "review-queue" } },
+    "ctrl-shift-r": "review-queue.next"
   }
 }
 ```
+
+> Note: `review-queue.next` is a mod command (`<mod>.<command>`) delivered via `keys.json` shortcuts only; running `herdr-app do review-queue.next` from the CLI in `herdr-app` 0.1.15 returns `{"ok": true}` without delivering the command to the mod.
 
 ## Coder Prompt Snippet
 
