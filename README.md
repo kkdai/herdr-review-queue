@@ -33,10 +33,26 @@ Options:
 ./install.sh --uninstall   # remove symlinks pointing to this repository
 ```
 
-Make sure `~/.local/bin` (or `$HC_REVIEW_BIN_DIR`) is on your `PATH`. To toggle the panel in Herdr:
+Make sure `~/.local/bin` (or `$HC_REVIEW_BIN_DIR`) is on your `PATH`.
+
+### Showing the panel
+
+Installing the mod via symlink does not automatically dock it into your layout. Open it manually as a right-hand pane split:
 
 ```sh
-herdr-app do mod.open '{"name":"review-queue"}'
+herdr-app do pane.split --direction right --mod review-queue
+# Or target a specific pane:
+herdr-app do pane.split --direction right --mod review-queue --pane <pane-id>
+```
+
+You can also bind a shortcut in `~/.config/herdr-app/keys.json` to `"review-queue:next"` to open the oldest pending item in the queue:
+
+```json
+{
+  "global": {
+    "ctrl-shift-r": "review-queue:next"
+  }
+}
 ```
 
 ## Coder Prompt Snippet
@@ -66,8 +82,6 @@ When a coder runs `hc-review ready "<summary>"`:
      hc-review seen <coder-address>
      ```
 4. Seen items move into the collapsible **Seen** section (up to 10 most recent), where you can **Reopen** (`review=ready`) or **Clear** all review labels.
-
-You can also bind a key in `~/.config/herdr-app/keys.json` to `"review-queue.next"` to jump directly to the oldest pending item in the queue.
 
 ## `hc-review` CLI Usage
 
