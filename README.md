@@ -4,6 +4,8 @@ A [Herdr](https://herdr.dev) mod and tiny POSIX `sh` CLI that displays a **"wait
 
 ![Review queue](docs/review-queue.png)
 
+Blog post (Traditional Chinese) on how it was built, with Claude Code as reviewer and two agy coder panes in Herdr: [自己寫一個 Herdr mod：用 label 做出「待 review」佇列](https://www.evanlin.com/herdr-review-queue-mod/)
+
 ## Why
 
 In a reviewer + coders workflow (one reviewer/PM agent plus multiple coder agents across Herdr panes), coders typically report completion via `hc send <reviewer> "done: ..."`. While that message lands in the reviewer agent's terminal input, the **person** has no persistent overview of:
